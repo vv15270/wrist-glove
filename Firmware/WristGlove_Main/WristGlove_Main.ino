@@ -7,35 +7,29 @@
 #include "LeverArm.h"
 #include "SensorData.h"
 #include "SensorReader.h"
+#include "GestureDetect.h"
+#include "RadioComms.h"
+#include "Calibration.h"
 
-// ── MADGWICK INSTANCES ─────────────────────────────────────────────
+// ── OBJECTS ────────────────────────────────────────────────────────
 Madgwick fingerFusion[5];
 Madgwick handFusion;
-
-// ── LEVER ARM CALIBRATION ──────────────────────────────────────────
 LeverArmCalibration leverCal;
-
-// ── NRF RADIO ─────────────────────────────────────────────────────
 RF24 radio(NRF_CE_PIN, NRF_CSN_PIN);
-
-// ── COMPLETE GLOVE STATE ───────────────────────────────────────────
 GloveState gloveState;
 
-// ── PINCH STATE TRACKING ───────────────────────────────────────────
+// ── PINCH TRACKING ─────────────────────────────────────────────────
 unsigned long pinchStartTime[3] = {0, 0, 0};
 bool pinchActive[3] = {false, false, false};
 
-// ── PINCH DETECTION ────────────────────────────────────────────────
 void readPinches() {
   int pinchPins[3] = {
     PINCH_INDEX_PIN,
     PINCH_MIDDLE_PIN,
     PINCH_RING_PIN
   };
-
   for (int i = 0; i < 3; i++) {
     bool contact = !digitalRead(pinchPins[i]);
-
     if (contact && pinchStartTime[i] == 0) {
       pinchStartTime[i] = millis();
     }
@@ -48,7 +42,6 @@ void readPinches() {
         pinchActive[i] = true;
       }
     }
-
     gloveState.pinch[i] = pinchActive[i];
   }
 }
@@ -56,49 +49,44 @@ void readPinches() {
 void setup() {
   Serial.begin(115200);
   Wire.begin();
-  Serial.println("WristGlove initializing...");
 
-  // Initialize pinch pins
   pinMode(PINCH_INDEX_PIN,  INPUT_PULLUP);
   pinMode(PINCH_MIDDLE_PIN, INPUT_PULLUP);
   pinMode(PINCH_RING_PIN,   INPUT_PULLUP);
 
-  // Initialize Madgwick filters
   handFusion.begin(LOOP_HZ);
   for (int i = 0; i < NUM_FINGERS; i++) {
     fingerFusion[i].begin(LOOP_HZ);
   }
 
-  // LSM9DS1 init placeholder
-  // BMI270 x5 init placeholder
-  // NRF24L01 init placeholder
+  if (!loadCalibration(leverCal)) {
+    Serial.println("No calibration — run calibration before use");
+  }
 
-  Serial.println("Ready.");
+  initRadioTransmitter(radio);
+
+  Serial.println("WristGlove ready.");
 }
 
 void loop() {
-  // ── READ ALL SENSORS ─────────────────────────────────────
   readAllSensors(gloveState);
-
-  // ── READ PINCH INPUTS ────────────────────────────────────
   readPinches();
 
-  // ── DEBUG OUTPUT ─────────────────────────────────────────
-  Serial.print("Hand yaw: ");
-  Serial.print(gloveState.hand.yaw);
-  Serial.print(" | Index curl: ");
-  Serial.print(gloveState.fingerCurlAngle[0]);
-  Serial.print(" | Middle curl: ");
-  Serial.print(gloveState.fingerCurlAngle[1]);
-  Serial.print(" | Ring curl: ");
-  Serial.print(gloveState.fingerCurlAngle[2]);
-  Serial.print(" | Thumb curl: ");
-  Serial.print(gloveState.fingerCurlAngle[3]);
-  Serial.print(" | Pinky curl: ");
-  Serial.println(gloveState.fingerCurlAngle[4]);
+  if (gloveState.calibrateRequested) {
+    runCalibration(leverCal, gloveState);
+    gloveState.calibrateRequested = false;
+  }
 
-  // ── TRANSMIT PLACEHOLDER ─────────────────────────────────
-  // Radio transmission goes here when hardware arrives
+  if (gloveState.packetNumber % 2 == 0) {
+    transmitGloveState(gloveState, radio);
+  }
+
+  Serial.print("Yaw:"); Serial.print(gloveState.hand.yaw);
+  Serial.print(" I:");  Serial.print(gloveState.fingerCurlAngle[0]);
+  Serial.print(" M:");  Serial.print(gloveState.fingerCurlAngle[1]);
+  Serial.print(" R:");  Serial.print(gloveState.fingerCurlAngle[2]);
+  Serial.print(" T:");  Serial.print(gloveState.fingerCurlAngle[3]);
+  Serial.print(" P:");  Serial.println(gloveState.fingerCurlAngle[4]);
 
   delay(1000 / LOOP_HZ);
 }

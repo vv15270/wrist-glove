@@ -1,8 +1,7 @@
 #pragma once
 
-// Stores calibrated lever arm ratios for each finger
 struct LeverArmCalibration {
-    float ratio[5];   // index=0, middle=1, ring=2, thumb=3, pinky=4
+    float ratio[5];
     bool  calibrated;
 };
 
