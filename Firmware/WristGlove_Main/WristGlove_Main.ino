@@ -1,21 +1,18 @@
 #include <Wire.h>
 #include <Adafruit_LSM9DS1.h>
 #include <SparkFun_BMI270_Arduino_Library.h>
-#include <RF24.h>
 #include "config.h"
 #include "Madgwick.h"
 #include "LeverArm.h"
 #include "SensorData.h"
 #include "SensorReader.h"
 #include "GestureDetect.h"
-#include "RadioComms.h"
 #include "Calibration.h"
 
 // ── OBJECTS ────────────────────────────────────────────────────────
 Madgwick fingerFusion[5];
 Madgwick handFusion;
 LeverArmCalibration leverCal;
-RF24 radio(NRF_CE_PIN, NRF_CSN_PIN);
 GloveState gloveState;
 
 // ── PINCH TRACKING ─────────────────────────────────────────────────
@@ -48,22 +45,23 @@ void readPinches() {
 
 void setup() {
   Serial.begin(115200);
-  Wire.begin();
+  Wire.begin(SDA_PIN, SCL_PIN);
 
   pinMode(PINCH_INDEX_PIN,  INPUT_PULLUP);
   pinMode(PINCH_MIDDLE_PIN, INPUT_PULLUP);
   pinMode(PINCH_RING_PIN,   INPUT_PULLUP);
+  pinMode(MOTOR_PIN,        OUTPUT);
 
   handFusion.begin(LOOP_HZ);
   for (int i = 0; i < NUM_FINGERS; i++) {
     fingerFusion[i].begin(LOOP_HZ);
   }
 
+  initSensors();
+
   if (!loadCalibration(leverCal)) {
     Serial.println("No calibration — run calibration before use");
   }
-
-  initRadioTransmitter(radio);
 
   Serial.println("WristGlove ready.");
 }
@@ -77,9 +75,6 @@ void loop() {
     gloveState.calibrateRequested = false;
   }
 
-  if (gloveState.packetNumber % 2 == 0) {
-    transmitGloveState(gloveState, radio);
-  }
 
   Serial.print("Yaw:"); Serial.print(gloveState.hand.yaw);
   Serial.print(" I:");  Serial.print(gloveState.fingerCurlAngle[0]);

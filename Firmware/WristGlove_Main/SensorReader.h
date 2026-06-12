@@ -6,17 +6,66 @@
 #include "Madgwick.h"
 #include <Wire.h>
 #include <math.h>
+#include <Adafruit_LSM9DS1.h>
+#include <Adafruit_Sensor.h>
+#include <SparkFun_BMI270_Arduino_Library.h>
+
+// ── SENSOR OBJECTS ─────────────────────────────────────────────────
+Adafruit_LSM9DS1 lsm;
+BMI270 fingerIMU;
 
 extern Madgwick fingerFusion[5];
 extern Madgwick handFusion;
 extern LeverArmCalibration leverCal;
 
+// ── SENSOR READY FLAGS ─────────────────────────────────────────────
+bool lsmReady = false;
+bool bmiReady[5] = {false, false, false, false, false};
+
+// ── CHANNEL MAP ────────────────────────────────────────────────────
+uint8_t channelMap[5] = {
+  INDEX_CHANNEL,
+  MIDDLE_CHANNEL,
+  RING_CHANNEL,
+  THUMB_CHANNEL,
+  PINKY_CHANNEL
+};
+
+// ── TCA9548A CHANNEL SELECT ────────────────────────────────────────
 void selectChannel(uint8_t channel) {
   Wire.beginTransmission(TCA9548A_ADDR);
   Wire.write(1 << channel);
   Wire.endTransmission();
 }
 
+// ── INIT ALL SENSORS ───────────────────────────────────────────────
+void initSensors() {
+  // LSM9DS1
+  if (lsm.begin()) {
+    lsm.setupAccel(lsm.LSM9DS1_ACCELRANGE_2G);
+    lsm.setupGyro(lsm.LSM9DS1_GYROSCALE_245DPS);
+    lsm.setupMag(lsm.LSM9DS1_MAGGAIN_4GAUSS);
+    lsmReady = true;
+    Serial.println("LSM9DS1 ready");
+  } else {
+    Serial.println("LSM9DS1 not found");
+  }
+
+  // BMI270s
+  for (int i = 0; i < NUM_FINGERS; i++) {
+    selectChannel(channelMap[i]);
+    if (fingerIMU.beginI2C() == BMI2_OK) {
+      bmiReady[i] = true;
+      Serial.print("BMI270 ready ch");
+      Serial.println(channelMap[i]);
+    } else {
+      Serial.print("BMI270 not found ch");
+      Serial.println(channelMap[i]);
+    }
+  }
+}
+
+// ── HELPER FUNCTIONS ───────────────────────────────────────────────
 float calcRotationSpeed(float gx, float gy, float gz) {
   return sqrtf(gx*gx + gy*gy + gz*gz);
 }
@@ -31,10 +80,23 @@ float calcDirection(float value) {
   return 0.0f;
 }
 
+// ── READ HAND LSM9DS1 ──────────────────────────────────────────────
 void readHand(HandReading &reading) {
-  float gx = 0.0f, gy = 0.0f, gz = 0.0f;
-  float ax = 0.0f, ay = 0.0f, az = 1.0f;
-  float mx = 0.0f, my = 0.0f, mz = 0.0f;
+  if (!lsmReady) return;
+
+  lsm.read();
+  sensors_event_t a, m, g, temp;
+  lsm.getEvent(&a, &m, &g, &temp);
+
+  float gx = g.gyro.x;
+  float gy = g.gyro.y;
+  float gz = g.gyro.z;
+  float ax = a.acceleration.x;
+  float ay = a.acceleration.y;
+  float az = a.acceleration.z;
+  float mx = m.magnetic.x;
+  float my = m.magnetic.y;
+  float mz = m.magnetic.z;
 
   reading.gyroX  = gx; reading.gyroY  = gy; reading.gyroZ  = gz;
   reading.accelX = ax; reading.accelY = ay; reading.accelZ = az;
@@ -55,14 +117,23 @@ void readHand(HandReading &reading) {
   reading.timestamp = millis();
 }
 
+// ── READ ONE FINGER BMI270 ─────────────────────────────────────────
 void readFinger(int fingerIndex,
-                uint8_t channel,
                 IMUReading &reading,
                 HandReading &handRef) {
-  selectChannel(channel);
 
-  float gx = 0.0f, gy = 0.0f, gz = 0.0f;
-  float ax = 0.0f, ay = 0.0f, az = 1.0f;
+  if (!bmiReady[fingerIndex]) return;
+
+  selectChannel(channelMap[fingerIndex]);
+
+  if (fingerIMU.getSensorData() != BMI2_OK) return;
+
+  float gx = fingerIMU.data.gyroX;
+  float gy = fingerIMU.data.gyroY;
+  float gz = fingerIMU.data.gyroZ;
+  float ax = fingerIMU.data.accelX;
+  float ay = fingerIMU.data.accelY;
+  float az = fingerIMU.data.accelZ;
 
   reading.gyroX  = gx; reading.gyroY  = gy; reading.gyroZ  = gz;
   reading.accelX = ax; reading.accelY = ay; reading.accelZ = az;
@@ -86,19 +157,12 @@ void readFinger(int fingerIndex,
   reading.timestamp = millis();
 }
 
+// ── READ ALL SENSORS ───────────────────────────────────────────────
 void readAllSensors(GloveState &state) {
   readHand(state.hand);
 
-  uint8_t channels[5] = {
-    INDEX_CHANNEL,
-    MIDDLE_CHANNEL,
-    RING_CHANNEL,
-    THUMB_CHANNEL,
-    PINKY_CHANNEL
-  };
-
   for (int i = 0; i < NUM_FINGERS; i++) {
-    readFinger(i, channels[i], state.finger[i], state.hand);
+    readFinger(i, state.finger[i], state.hand);
   }
 
   for (int i = 0; i < NUM_FINGERS; i++) {
